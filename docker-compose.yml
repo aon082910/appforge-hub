@@ -1,0 +1,26 @@
+services:
+  appforge-hub:
+    build: .
+    image: allornothing/appforge-hub:latest
+    container_name: appforge-hub
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/config:/config
+    environment:
+      PUID: "99"
+      PGID: "100"
+      TZ: "Etc/UTC"
+    restart: unless-stopped
+
+  # Optional local model backend. Not started by default -- run with
+  # `docker compose --profile local-ai up` and set Settings -> AI provider = Ollama.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: appforge-ollama
+    profiles: ["local-ai"]
+    volumes:
+      - ./data/ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
