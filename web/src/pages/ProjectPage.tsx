@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, type ChatMsg, type ProjectDetail } from "../lib/api";
 
-type Tab = "preview" | "files";
+type Tab = "preview" | "files" | "logs";
 
 export function ProjectPage() {
   const { id } = useParams<{ id: string }>();
@@ -10,10 +10,13 @@ export function ProjectPage() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [streamText, setStreamText] = useState("");
   const [error, setError] = useState("");
   const [previewKey, setPreviewKey] = useState(0);
   const [tab, setTab] = useState<Tab>("preview");
+  const [crashInfo, setCrashInfo] = useState<{ error: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const streamBoxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (id) load(id);
@@ -23,38 +26,55 @@ export function ProjectPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  useEffect(() => {
+    streamBoxRef.current?.scrollTo({ top: streamBoxRef.current.scrollHeight });
+  }, [streamText]);
+
   async function load(projectId: string) {
     const p = await api.getProject(projectId);
     setProject(p);
     setMessages(p.messages);
   }
 
-  async function send(e: React.FormEvent) {
-    e.preventDefault();
-    if (!id || !input.trim() || sending) return;
-    const text = input.trim();
-    setInput("");
+  async function sendMessage(text: string) {
+    if (!id || !text.trim() || sending) return;
     setError("");
+    setCrashInfo(null);
     setMessages((m) => [...m, { role: "user", content: text, created_at: "" }]);
     setSending(true);
+    setStreamText("");
     try {
-      const result = await api.sendChat(id, text);
+      const result = await api.sendChatStream(id, text, (chunk) => setStreamText((s) => s + chunk));
       setMessages((m) => [...m, { role: "assistant", content: result.summary, created_at: "" }]);
+      if (result.crashed) setCrashInfo({ error: result.summary });
       await load(id);
       setPreviewKey((k) => k + 1);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setSending(false);
+      setStreamText("");
     }
+  }
+
+  async function send(e: React.FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    setInput("");
+    await sendMessage(text);
   }
 
   async function toggleRun() {
     if (!id || !project) return;
-    if (project.running) await api.stopProject(id);
-    else {
-      await api.runProject(id);
+    setError("");
+    if (project.running) {
+      await api.stopProject(id);
+      setCrashInfo(null);
+    } else {
+      const result = await api.runProject(id);
       setPreviewKey((k) => k + 1);
+      if (result.crashed) setCrashInfo({ error: result.error || "The app crashed on startup." });
+      else setCrashInfo(null);
     }
     await load(id);
   }
@@ -70,7 +90,7 @@ export function ProjectPage() {
         </div>
 
         <div className="flex-1 space-y-3 overflow-y-auto p-4">
-          {messages.length === 0 && (
+          {messages.length === 0 && !sending && (
             <p className="text-sm text-neutral-500">
               Describe the app you want, e.g. "A page to track household chores with who did what and when,
               with login for each family member."
@@ -79,14 +99,24 @@ export function ProjectPage() {
           {messages.map((m, i) => (
             <div
               key={i}
-              className={`rounded-lg p-3 text-sm ${
+              className={`rounded-lg p-3 text-sm whitespace-pre-wrap ${
                 m.role === "user" ? "bg-violet-600/20 text-neutral-100" : "bg-neutral-900 text-neutral-300"
               }`}
             >
               {m.content}
             </div>
           ))}
-          {sending && <div className="text-sm text-neutral-500">Building…</div>}
+          {sending && (
+            <div>
+              <div className="mb-1 text-xs text-neutral-500">Building…</div>
+              <div
+                ref={streamBoxRef}
+                className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg bg-neutral-900 p-3 font-mono text-xs text-neutral-500"
+              >
+                {streamText || "…"}
+              </div>
+            </div>
+          )}
           <div ref={bottomRef} />
         </div>
 
@@ -125,6 +155,12 @@ export function ProjectPage() {
               >
                 Files
               </button>
+              <button
+                onClick={() => setTab("logs")}
+                className={`px-3 py-1.5 ${tab === "logs" ? "bg-neutral-800 text-white" : "text-neutral-400"}`}
+              >
+                Logs
+              </button>
             </div>
             <span className="text-sm text-neutral-400">
               {project.running ? (
@@ -134,15 +170,39 @@ export function ProjectPage() {
               )}
             </span>
           </div>
-          <button
-            onClick={toggleRun}
-            className="rounded bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700"
-          >
-            {project.running ? "Stop" : "Run"}
-          </button>
+          <div className="flex gap-2">
+            <a
+              href={api.downloadUrl(project.id)}
+              className="rounded bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700"
+            >
+              Download
+            </a>
+            <button
+              onClick={toggleRun}
+              className="rounded bg-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-700"
+            >
+              {project.running ? "Stop" : "Run"}
+            </button>
+          </div>
         </div>
 
-        {tab === "preview" ? (
+        {crashInfo && (
+          <div className="border-b border-red-900 bg-red-950/50 p-4 text-sm text-red-300">
+            <div className="mb-2 font-medium">The app crashed on startup.</div>
+            <pre className="mb-2 max-h-32 overflow-y-auto whitespace-pre-wrap font-mono text-xs text-red-400">
+              {crashInfo.error}
+            </pre>
+            <button
+              onClick={() => sendMessage(`The app crashed on startup with this error:\n\n${crashInfo.error}\n\nPlease fix it.`)}
+              disabled={sending}
+              className="rounded bg-red-800 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              Ask AI to fix it
+            </button>
+          </div>
+        )}
+
+        {tab === "preview" && (
           <div className="flex-1 bg-white">
             {project.running ? (
               <iframe
@@ -157,10 +217,52 @@ export function ProjectPage() {
               </div>
             )}
           </div>
-        ) : (
+        )}
+        {tab === "files" && (
           <FileEditor projectId={id} files={project.files} onSaved={() => load(id)} />
         )}
+        {tab === "logs" && <LogsView projectId={id} running={project.running} />}
       </div>
+    </div>
+  );
+}
+
+function LogsView({ projectId, running }: { projectId: string; running: boolean }) {
+  const [log, setLog] = useState("");
+  const [loading, setLoading] = useState(true);
+  const boxRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      try {
+        const r = await api.getLogs(projectId);
+        if (!cancelled) setLog(r.log);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    poll();
+    const interval = running ? setInterval(poll, 2000) : undefined;
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, [projectId, running]);
+
+  useEffect(() => {
+    boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight });
+  }, [log]);
+
+  return (
+    <div className="flex-1 overflow-hidden bg-neutral-950 p-4">
+      {loading ? (
+        <p className="text-sm text-neutral-500">Loading…</p>
+      ) : (
+        <pre ref={boxRef} className="h-full overflow-y-auto whitespace-pre-wrap font-mono text-xs text-neutral-400">
+          {log || "No output yet. Run the app to see its logs here."}
+        </pre>
+      )}
     </div>
   );
 }

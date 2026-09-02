@@ -3,13 +3,17 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { nanoid } from "nanoid";
 import { createProvider } from "../ai/index.js";
-import { generateApp, writeGeneratedFiles } from "../ai/generator.js";
+import { generateApp, writeGeneratedFiles, type GenerationResult } from "../ai/generator.js";
 import type { ChatMessage } from "../ai/types.js";
 import { db } from "../db/index.js";
-import { getRunningPort, isRunning, startApp, stopApp } from "../runtime/runner.js";
+import { getLogs, getRunningPort, isRunning, startApp, stopApp } from "../runtime/runner.js";
 import { scaffoldProject } from "../runtime/scaffold.js";
-import { PROJECTS_DIR, projectDir } from "../util/paths.js";
+import { zipProject } from "../runtime/archive.js";
+import { isInside, projectDir } from "../util/paths.js";
 import { currentProviderConfig } from "./settings.js";
+
+const MAX_AUTO_FIX_ATTEMPTS = 2;
+const RESULT_MARKER = "\n===APPFORGE_RESULT===\n";
 
 interface ProjectRow {
   id: string;
@@ -73,7 +77,7 @@ export async function projectRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const dir = projectDir(req.params.id);
       const target = path.join(dir, req.query.path || "");
-      if (!target.startsWith(path.resolve(dir))) return reply.code(400).send({ error: "Invalid path" });
+      if (!isInside(dir, target)) return reply.code(400).send({ error: "Invalid path" });
       if (!fs.existsSync(target)) return reply.code(404).send({ error: "Not found" });
       return { path: req.query.path, content: fs.readFileSync(target, "utf8") };
     }
@@ -95,7 +99,7 @@ export async function projectRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "Invalid path" });
       }
       const target = path.join(dir, relPath);
-      if (!target.startsWith(path.resolve(dir))) return reply.code(400).send({ error: "Invalid path" });
+      if (!isInside(dir, target)) return reply.code(400).send({ error: "Invalid path" });
 
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, content, "utf8");
@@ -117,6 +121,9 @@ export async function projectRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Streams the model's raw output as it's generated, then a final
+  // "===APPFORGE_RESULT===\n<json>" marker once generation (and, if the app
+  // crashed on boot, up to MAX_AUTO_FIX_ATTEMPTS self-fix retries) is done.
   app.post<{ Params: { id: string }; Body: { message: string } }>(
     "/api/projects/:id/chat",
     async (req, reply) => {
@@ -142,45 +149,114 @@ export async function projectRoutes(app: FastifyInstance) {
         .prepare("SELECT role, content FROM chat_messages WHERE project_id = ? ORDER BY id ASC")
         .all(req.params.id) as unknown as ChatMessage[];
 
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Transfer-Encoding": "chunked",
+        "Cache-Control": "no-cache",
+      });
+
+      const dir = projectDir(req.params.id);
+      const provider = createProvider(cfg);
+      let result: GenerationResult | null = null;
+      let crashed = false;
+      let crashLog = "";
+      let attempts = 0;
+      let fatalError: string | null = null;
+
       try {
-        const provider = createProvider(cfg);
-        const result = await generateApp(provider, history);
-        writeGeneratedFiles(projectDir(req.params.id), result.files);
+        while (attempts <= MAX_AUTO_FIX_ATTEMPTS) {
+          attempts++;
+          result = await generateApp(provider, history, (t) => reply.raw.write(t));
+          writeGeneratedFiles(dir, result.files);
 
-        db.prepare("INSERT INTO chat_messages (project_id, role, content) VALUES (?, 'assistant', ?)").run(
-          req.params.id,
-          result.summary
-        );
-        db.prepare("UPDATE projects SET status = 'built', updated_at = datetime('now') WHERE id = ?").run(
-          req.params.id
-        );
+          if (isRunning(req.params.id)) stopApp(req.params.id);
+          const run = await startApp(req.params.id, dir);
+          crashed = run.crashed;
+          crashLog = run.error || "";
 
-        if (isRunning(req.params.id)) {
-          stopApp(req.params.id);
-          await startApp(req.params.id, projectDir(req.params.id));
+          if (!crashed || attempts > MAX_AUTO_FIX_ATTEMPTS) break;
+
+          reply.raw.write(
+            `\n\n[Attempt ${attempts} crashed on startup — asking the AI to fix it and retrying...]\n\n`
+          );
+          history.push({ role: "assistant", content: result.summary });
+          history.push({
+            role: "user",
+            content: `The app crashed immediately on startup with this error:\n\n${crashLog}\n\nFix the code so it starts and runs correctly. Respond with the full corrected file(s) in the same format.`,
+          });
         }
-
-        return {
-          summary: result.summary,
-          files: result.files.map((f) => f.path),
-        };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message || "Generation failed" });
+        fatalError = err.message || "Generation failed";
       }
+
+      if (fatalError) {
+        reply.raw.write(RESULT_MARKER + JSON.stringify({ error: fatalError }));
+        reply.raw.end();
+        return;
+      }
+
+      const finalSummary = crashed
+        ? `${result!.summary}\n\n⚠️ Still crashing after ${attempts} attempt(s): ${crashLog.slice(0, 500)}`
+        : result!.summary;
+
+      db.prepare("INSERT INTO chat_messages (project_id, role, content) VALUES (?, 'assistant', ?)").run(
+        req.params.id,
+        finalSummary
+      );
+      db.prepare("UPDATE projects SET status = ?, updated_at = datetime('now') WHERE id = ?").run(
+        crashed ? "crashed" : "running",
+        req.params.id
+      );
+
+      reply.raw.write(
+        RESULT_MARKER +
+          JSON.stringify({
+            summary: finalSummary,
+            files: result!.files.map((f) => f.path),
+            attempts,
+            crashed,
+          })
+      );
+      reply.raw.end();
     }
   );
 
   app.post<{ Params: { id: string } }>("/api/projects/:id/run", async (req, reply) => {
     const dir = projectDir(req.params.id);
     if (!fs.existsSync(dir)) return reply.code(404).send({ error: "Not found" });
-    const port = await startApp(req.params.id, dir);
-    db.prepare("UPDATE projects SET status = 'running', port = ? WHERE id = ?").run(port, req.params.id);
-    return { port };
+    const run = await startApp(req.params.id, dir);
+    db.prepare("UPDATE projects SET status = ?, port = ? WHERE id = ?").run(
+      run.crashed ? "crashed" : "running",
+      run.port,
+      req.params.id
+    );
+    return run;
   });
 
   app.post<{ Params: { id: string } }>("/api/projects/:id/stop", async (req) => {
     stopApp(req.params.id);
     db.prepare("UPDATE projects SET status = 'built' WHERE id = ?").run(req.params.id);
     return { ok: true };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/projects/:id/logs", async (req, reply) => {
+    const row = db.prepare("SELECT id FROM projects WHERE id = ?").get(req.params.id);
+    if (!row) return reply.code(404).send({ error: "Not found" });
+    return { log: getLogs(req.params.id), running: isRunning(req.params.id) };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/projects/:id/download", async (req, reply) => {
+    const row = db.prepare("SELECT name FROM projects WHERE id = ?").get(req.params.id) as
+      | { name: string }
+      | undefined;
+    if (!row) return reply.code(404).send({ error: "Not found" });
+    const dir = projectDir(req.params.id);
+    if (!fs.existsSync(dir)) return reply.code(404).send({ error: "Not found" });
+
+    const safeName = row.name.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase() || "app";
+    reply.header("Content-Type", "application/zip");
+    reply.header("Content-Disposition", `attachment; filename="${safeName}.zip"`);
+    return reply.send(zipProject(dir));
   });
 }

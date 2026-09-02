@@ -19,6 +19,15 @@ something you run entirely on your own hardware.
   use, instead of reinventing auth each time
 - **Live preview** — each running app is reverse-proxied into the main UI at
   `/preview/<id>/`
+- **Streamed generation** — chat responses stream token-by-token instead of
+  blocking silently for minutes
+- **Self-healing** — if a generated app crashes on startup, the crash log is
+  automatically fed back to the AI for up to 2 fix attempts before giving up
+  and surfacing the error, with an "Ask AI to fix it" button for the same flow
+  on demand
+- **File editor + logs + download** — view/edit any generated file in the UI
+  (with auto-restart on save), tail the running app's stdout/stderr, or
+  download the whole project as a zip
 - **Pluggable AI** — cloud APIs (Anthropic, OpenAI, or any OpenAI-compatible
   endpoint) or fully offline local models (Ollama, llama.cpp), switchable
   anytime from Settings
@@ -53,7 +62,10 @@ variables, duplicate function names. For usable local results, use a
 larger or coder-tuned model (`qwen2.5-coder:7b`+, `llama3.1:8b`+, or bigger if
 your hardware allows) rather than a small general-purpose one. Cloud models
 (Claude, GPT-4o) are markedly more reliable and are the better default if
-you have the option.
+you have the option. The crash-auto-fix loop (see Features) mitigates this
+somewhat — a small model's first attempt crashing isn't necessarily fatal
+anymore — but it isn't a substitute for a capable model; it only catches
+crash-on-boot failures, not silently wrong behavior.
 
 ### Unraid
 

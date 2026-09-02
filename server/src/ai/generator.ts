@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isInside } from "../util/paths.js";
 import type { AiProvider, ChatMessage } from "./types.js";
 
 // A delimiter-based output format instead of JSON: smaller/local models are
@@ -107,7 +108,7 @@ export async function generateApp(
 export function writeGeneratedFiles(projectDir: string, files: GeneratedFile[]) {
   for (const file of files) {
     const target = path.join(projectDir, file.path);
-    if (!target.startsWith(path.resolve(projectDir))) {
+    if (!isInside(projectDir, target)) {
       throw new Error(`Refusing to write outside project dir: ${file.path}`);
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
