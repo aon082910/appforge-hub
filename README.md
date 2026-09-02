@@ -46,6 +46,15 @@ docker exec -it appforge-ollama ollama pull llama3.1
 Then in Settings, set provider to "Local: Ollama" with base URL
 `http://ollama:11434`.
 
+**Model choice matters a lot here.** Tested live against `llama3.2:3b`: it
+reliably follows the output format (see below) but regularly writes broken
+code for anything past a trivial CRUD page — wrong async patterns, undefined
+variables, duplicate function names. For usable local results, use a
+larger or coder-tuned model (`qwen2.5-coder:7b`+, `llama3.1:8b`+, or bigger if
+your hardware allows) rather than a small general-purpose one. Cloud models
+(Claude, GPT-4o) are markedly more reliable and are the better default if
+you have the option.
+
 ### Unraid
 
 See [UNRAID.md](UNRAID.md), or install the `AppForge Hub` template from
@@ -73,14 +82,19 @@ while developing.
 
 Every project starts as a copy of `server/runtime-template/` (an Express app
 with `lib/db.js` and `lib/auth.js` helpers already wired to a per-project
-SQLite file). The AI is prompted to respond with a JSON manifest of files to
-write, constrained to that same convention, so it never has to re-implement
-password hashing or reinvent the auth flow — it just uses
-`require('./lib/auth')`. Generated apps have no network access to `npm
-install`; all their dependencies (express, better-sqlite3-equivalent via
-`node:sqlite`, bcryptjs, jsonwebtoken, cookie-parser) are pre-installed once in
-the shared runtime template and made available via `NODE_PATH`, so generation
-and running both work fully offline.
+SQLite file). The AI is prompted to respond with plain-text `===FILE:
+path===` / `===END FILE===` blocks (see `server/src/ai/generator.ts`) rather
+than JSON — file content is taken verbatim between markers, so there's no
+escaping for the model to get wrong. An earlier JSON-based version broke in
+practice: a local model emitted an unescaped template literal inside a JSON
+string and `JSON.parse` choked on it. The delimiter format sidesteps that
+class of failure entirely and has proven more robust across model sizes.
+
+Generated apps have no network access to `npm install`; all their
+dependencies (express, `node:sqlite` in place of better-sqlite3, bcryptjs,
+jsonwebtoken, cookie-parser) are pre-installed once in the shared runtime
+template and made available via `NODE_PATH`, so generation and running both
+work fully offline.
 
 ## License
 

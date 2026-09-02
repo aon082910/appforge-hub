@@ -62,6 +62,8 @@ export const api = {
   deleteProject: (id: string) => request(`/api/projects/${id}`, { method: "DELETE" }),
   getFile: (id: string, path: string) =>
     request<{ path: string; content: string }>(`/api/projects/${id}/file?path=${encodeURIComponent(path)}`),
+  saveFile: (id: string, path: string, content: string) =>
+    request(`/api/projects/${id}/file`, { method: "PUT", body: JSON.stringify({ path, content }) }),
   sendChat: (id: string, message: string) =>
     request<{ summary: string; files: string[] }>(`/api/projects/${id}/chat`, {
       method: "POST",

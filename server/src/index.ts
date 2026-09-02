@@ -4,6 +4,7 @@ import cors from "@fastify/cors";
 import staticPlugin from "@fastify/static";
 import Fastify from "fastify";
 import { authRoutes, getSessionUser } from "./routes/auth.js";
+import { previewRoutes } from "./routes/preview.js";
 import { projectRoutes } from "./routes/projects.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { stopAll } from "./runtime/runner.js";
@@ -21,7 +22,8 @@ await app.register(cors, { origin: true, credentials: true });
 await app.register(cookie);
 
 app.addHook("onRequest", async (req, reply) => {
-  if (!req.url.startsWith("/api/") || PUBLIC_PATHS.has(req.url.split("?")[0])) return;
+  const guarded = req.url.startsWith("/api/") || req.url.startsWith("/preview/");
+  if (!guarded || PUBLIC_PATHS.has(req.url.split("?")[0])) return;
   if (!getSessionUser(req)) {
     reply.code(401).send({ error: "Not authenticated" });
   }
@@ -30,6 +32,7 @@ app.addHook("onRequest", async (req, reply) => {
 await app.register(authRoutes);
 await app.register(settingsRoutes);
 await app.register(projectRoutes);
+await app.register(previewRoutes);
 
 const webDist = path.resolve(process.env.APPFORGE_WEB_DIST || "../web/dist");
 await app.register(staticPlugin, { root: webDist, wildcard: false });

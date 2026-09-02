@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import http from "node:http";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { nanoid } from "nanoid";
@@ -9,7 +8,7 @@ import type { ChatMessage } from "../ai/types.js";
 import { db } from "../db/index.js";
 import { getRunningPort, isRunning, startApp, stopApp } from "../runtime/runner.js";
 import { scaffoldProject } from "../runtime/scaffold.js";
-import { PROJECTS_DIR } from "../util/paths.js";
+import { PROJECTS_DIR, projectDir } from "../util/paths.js";
 import { currentProviderConfig } from "./settings.js";
 
 interface ProjectRow {
@@ -20,10 +19,6 @@ interface ProjectRow {
   port: number | null;
   created_at: string;
   updated_at: string;
-}
-
-function projectDir(id: string) {
-  return path.join(PROJECTS_DIR, id);
 }
 
 function listFiles(dir: string, base = dir): string[] {
@@ -81,6 +76,37 @@ export async function projectRoutes(app: FastifyInstance) {
       if (!target.startsWith(path.resolve(dir))) return reply.code(400).send({ error: "Invalid path" });
       if (!fs.existsSync(target)) return reply.code(404).send({ error: "Not found" });
       return { path: req.query.path, content: fs.readFileSync(target, "utf8") };
+    }
+  );
+
+  app.put<{ Params: { id: string }; Body: { path: string; content: string } }>(
+    "/api/projects/:id/file",
+    async (req, reply) => {
+      const row = db.prepare("SELECT id FROM projects WHERE id = ?").get(req.params.id);
+      if (!row) return reply.code(404).send({ error: "Not found" });
+
+      const dir = projectDir(req.params.id);
+      const relPath = req.body?.path;
+      const content = req.body?.content;
+      if (typeof relPath !== "string" || typeof content !== "string") {
+        return reply.code(400).send({ error: "path and content are required" });
+      }
+      if (relPath.startsWith("/") || relPath.includes("..")) {
+        return reply.code(400).send({ error: "Invalid path" });
+      }
+      const target = path.join(dir, relPath);
+      if (!target.startsWith(path.resolve(dir))) return reply.code(400).send({ error: "Invalid path" });
+
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content, "utf8");
+      db.prepare("UPDATE projects SET updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+
+      if (isRunning(req.params.id)) {
+        stopApp(req.params.id);
+        await startApp(req.params.id, dir);
+      }
+
+      return { ok: true };
     }
   );
 
@@ -156,31 +182,5 @@ export async function projectRoutes(app: FastifyInstance) {
     stopApp(req.params.id);
     db.prepare("UPDATE projects SET status = 'built' WHERE id = ?").run(req.params.id);
     return { ok: true };
-  });
-
-  // Reverse proxy so a running generated app is reachable through this
-  // container's single exposed port at /preview/<id>/...
-  app.all("/preview/:id/*", async (req, reply) => {
-    const port = getRunningPort((req.params as any).id);
-    if (!port) return reply.code(404).send({ error: "App is not running" });
-    const subPath = "/" + ((req.params as any)["*"] || "");
-
-    await new Promise<void>((resolve) => {
-      const proxyReq = http.request(
-        { host: "127.0.0.1", port, path: subPath, method: req.method, headers: req.headers },
-        (proxyRes) => {
-          reply.raw.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
-          proxyRes.pipe(reply.raw);
-          proxyRes.on("end", resolve);
-        }
-      );
-      proxyReq.on("error", () => {
-        reply.raw.writeHead(502);
-        reply.raw.end("Preview app is not responding");
-        resolve();
-      });
-      if (req.body) proxyReq.write(typeof req.body === "string" ? req.body : JSON.stringify(req.body));
-      proxyReq.end();
-    });
   });
 }
