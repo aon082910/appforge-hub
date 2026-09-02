@@ -25,12 +25,13 @@ something you run entirely on your own hardware.
   automatically fed back to the AI for up to 2 fix attempts before giving up
   and surfacing the error, with an "Ask AI to fix it" button for the same flow
   on demand
-- **File editor + logs + download** — view/edit any generated file in the UI
-  (with auto-restart on save), tail the running app's stdout/stderr, or
-  download the whole project as a zip
+- **File editor + logs + download** — syntax-highlighted editing (CodeMirror,
+  Ctrl/Cmd+S to save) of any generated file with auto-restart on save, tail
+  the running app's stdout/stderr, or download the whole project as a zip
 - **Pluggable AI** — cloud APIs (Anthropic, OpenAI, or any OpenAI-compatible
   endpoint) or fully offline local models (Ollama, llama.cpp), switchable
-  anytime from Settings
+  anytime from Settings, with a Test Connection button that checks the
+  config actually works before you spend a generation attempt on it
 - **Single container** — the whole platform (UI, API, generated-app runtime)
   ships as one Docker image; generated apps run as child processes on internal
   ports, never separate containers

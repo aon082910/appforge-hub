@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, type ChatMsg, type ProjectDetail } from "../lib/api";
+
+const FileEditor = lazy(() => import("./FileEditor"));
 
 type Tab = "preview" | "files" | "logs";
 
@@ -219,7 +221,9 @@ export function ProjectPage() {
           </div>
         )}
         {tab === "files" && (
-          <FileEditor projectId={id} files={project.files} onSaved={() => load(id)} />
+          <Suspense fallback={<div className="flex-1 p-4 text-sm text-neutral-500">Loading editor…</div>}>
+            <FileEditor projectId={id} files={project.files} onSaved={() => load(id)} />
+          </Suspense>
         )}
         {tab === "logs" && <LogsView projectId={id} running={project.running} />}
       </div>
@@ -267,99 +271,3 @@ function LogsView({ projectId, running }: { projectId: string; running: boolean 
   );
 }
 
-function FileEditor({
-  projectId,
-  files,
-  onSaved,
-}: {
-  projectId: string;
-  files: string[];
-  onSaved: () => void;
-}) {
-  const [selected, setSelected] = useState<string | null>(files[0] ?? null);
-  const [content, setContent] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (selected) openFile(selected);
-    else setContent("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected]);
-
-  useEffect(() => {
-    if (selected && !files.includes(selected)) setSelected(files[0] ?? null);
-  }, [files, selected]);
-
-  async function openFile(path: string) {
-    setLoading(true);
-    setError("");
-    try {
-      const f = await api.getFile(projectId, path);
-      setContent(f.content);
-      setDirty(false);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function save() {
-    if (!selected) return;
-    setSaving(true);
-    setError("");
-    try {
-      await api.saveFile(projectId, selected, content);
-      setDirty(false);
-      onSaved();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="flex flex-1 overflow-hidden">
-      <div className="w-56 overflow-y-auto border-r border-neutral-800 p-2">
-        {files.map((f) => (
-          <button
-            key={f}
-            onClick={() => setSelected(f)}
-            className={`block w-full truncate rounded px-2 py-1 text-left font-mono text-xs ${
-              f === selected ? "bg-neutral-800 text-white" : "text-neutral-400 hover:bg-neutral-900"
-            }`}
-          >
-            {f}
-          </button>
-        ))}
-      </div>
-      <div className="flex flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-neutral-800 px-4 py-2">
-          <span className="font-mono text-sm text-neutral-300">{selected || "No file selected"}</span>
-          <button
-            onClick={save}
-            disabled={!selected || !dirty || saving}
-            className="rounded bg-violet-600 px-3 py-1 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
-        {error && <p className="px-4 pt-2 text-sm text-red-400">{error}</p>}
-        <textarea
-          className="flex-1 resize-none bg-neutral-950 p-4 font-mono text-sm text-neutral-200 outline-none"
-          value={loading ? "Loading…" : content}
-          disabled={loading || !selected}
-          onChange={(e) => {
-            setContent(e.target.value);
-            setDirty(true);
-          }}
-          spellCheck={false}
-        />
-      </div>
-    </div>
-  );
-}

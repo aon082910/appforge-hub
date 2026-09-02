@@ -70,6 +70,11 @@ export const api = {
   getSettings: () => request<Settings>("/api/settings"),
   saveSettings: (body: Record<string, string>) =>
     request("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
+  testSettings: (body: Record<string, string>) =>
+    request<{ ok: boolean; reply?: string; error?: string }>("/api/settings/test", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   listProjects: () => request<Project[]>("/api/projects"),
   createProject: (name: string, description: string) =>

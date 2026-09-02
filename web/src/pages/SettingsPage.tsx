@@ -21,6 +21,8 @@ export function SettingsPage() {
   const [model, setModel] = useState("");
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; reply?: string; error?: string } | null>(null);
 
   useEffect(() => {
     api.getSettings().then((s) => {
@@ -47,6 +49,24 @@ export function SettingsPage() {
       if (apiKey) setApiKeySet(true);
     } catch (err: any) {
       setError(err.message);
+    }
+  }
+
+  async function testConnection() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await api.testSettings({
+        ai_provider: provider,
+        ai_api_key: apiKey,
+        ai_base_url: baseUrl,
+        ai_model: model,
+      });
+      setTestResult(result);
+    } catch (err: any) {
+      setTestResult({ ok: false, error: err.message });
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -132,9 +152,27 @@ export function SettingsPage() {
 
         {error && <p className="text-sm text-red-400">{error}</p>}
         {saved && <p className="text-sm text-green-400">Saved.</p>}
-        <button className="rounded bg-violet-600 px-4 py-2 font-medium text-white hover:bg-violet-500">
-          Save
-        </button>
+        {testResult &&
+          (testResult.ok ? (
+            <p className="text-sm text-green-400">
+              Connected — model replied: <span className="font-mono">{testResult.reply}</span>
+            </p>
+          ) : (
+            <p className="text-sm text-red-400">Connection failed: {testResult.error}</p>
+          ))}
+        <div className="flex gap-2">
+          <button className="rounded bg-violet-600 px-4 py-2 font-medium text-white hover:bg-violet-500">
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={testConnection}
+            disabled={testing || provider === "none"}
+            className="rounded bg-neutral-800 px-4 py-2 font-medium text-neutral-200 hover:bg-neutral-700 disabled:opacity-50"
+          >
+            {testing ? "Testing…" : "Test Connection"}
+          </button>
+        </div>
       </form>
     </div>
   );
