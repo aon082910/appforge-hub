@@ -1,114 +1,29 @@
 # AppForge Hub
 
-A self-hosted, offline-capable AI app builder. Describe an app in chat and it
-scaffolds a real, running web app — Express server, SQLite database, and
-cookie-based auth already wired up — inside its own sandboxed process, with a
-live preview and an editable file tree. No cloud account, billing, or
-third-party signup involved; the only account is the admin login you create on
-first visit.
+A self-hosted AI app builder. Describe an app in chat and AppForge Hub builds a real, running web app (Express server, SQLite database and login already wired up), with a live preview and an editable file tree. No cloud account or billing. The only account is the admin login you create on first visit.
 
-Inspired by [Hercules](https://hercules.app/)'s chat-to-app concept, rebuilt as
-something you run entirely on your own hardware.
+What's nice about it:
 
-## Features
+- **Build by chatting.** Ask for changes in plain words ("add a delete button") and iterate.
+- **It fixes its own crashes.** If a generated app won't start, the error goes back to the AI for a couple of repair attempts.
+- **Use any AI.** Claude, OpenAI, any OpenAI-compatible endpoint, or a local model through Ollama.
 
-- **Chat-driven app generation** — describe what you want, iterate by chatting
-  further ("add a delete button", "require login before posting")
-- **Built-in DB + auth per app** — every generated app gets its own SQLite
-  database and a ready-made register/login/session helper the AI is told to
-  use, instead of reinventing auth each time
-- **Live preview** — each running app is reverse-proxied into the main UI at
-  `/preview/<id>/`
-- **Streamed generation** — chat responses stream token-by-token instead of
-  blocking silently for minutes
-- **Self-healing** — if a generated app crashes on startup, the crash log is
-  automatically fed back to the AI for up to 2 fix attempts before giving up
-  and surfacing the error, with an "Ask AI to fix it" button for the same flow
-  on demand
-- **File editor + logs + download** — syntax-highlighted editing (CodeMirror,
-  Ctrl/Cmd+S to save) of any generated file with auto-restart on save, tail
-  the running app's stdout/stderr, or download the whole project as a zip
-- **Pluggable AI** — cloud APIs (Anthropic, OpenAI, or any OpenAI-compatible
-  endpoint) or fully offline local models (Ollama, llama.cpp), switchable
-  anytime from Settings, with a Test Connection button that checks the
-  config actually works before you spend a generation attempt on it
-- **Single container** — the whole platform (UI, API, generated-app runtime)
-  ships as one Docker image; generated apps run as child processes on internal
-  ports, never separate containers
+Image: [allornothing/appforge-hub](https://hub.docker.com/r/allornothing/appforge-hub) · Source: [aon082910/appforge-hub](https://github.com/aon082910/appforge-hub)
 
-## Running it
+## Install
 
-### Docker Compose (recommended for trying it out)
+**Docker Compose:** run `docker compose up -d`, open `http://localhost:8000`, and create the admin account. For a bundled local Ollama, use `docker compose --profile local-ai up -d` and pull a model.
 
-```bash
-docker compose up -d
-```
+**Unraid:** install the `AppForge Hub` template from [AoN-Unraid-Apps](https://github.com/aon082910/AoN-Unraid-Apps). See `UNRAID.md` for details.
 
-Then open http://localhost:8000 and create the admin account.
+| Setting | Default | What it's for |
+|---|---|---|
+| Port | `8000` | Web UI |
+| `/config` | `/mnt/user/appdata/appforge-hub` | Database and generated apps |
+| `AI_PROVIDER` | `none` | Also settable in Settings. Add `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL` as needed |
 
-To also run a local Ollama instance alongside it:
+Cloud models are noticeably more reliable. For local models, use a coder-tuned one (`qwen2.5-coder:7b` or bigger), since small general models often write broken code.
 
-```bash
-docker compose --profile local-ai up -d
-docker exec -it appforge-ollama ollama pull llama3.1
-```
+## Help
 
-Then in Settings, set provider to "Local: Ollama" with base URL
-`http://ollama:11434`.
-
-**Model choice matters a lot here.** Tested live against `llama3.2:3b`: it
-reliably follows the output format (see below) but regularly writes broken
-code for anything past a trivial CRUD page — wrong async patterns, undefined
-variables, duplicate function names. For usable local results, use a
-larger or coder-tuned model (`qwen2.5-coder:7b`+, `llama3.1:8b`+, or bigger if
-your hardware allows) rather than a small general-purpose one. Cloud models
-(Claude, GPT-4o) are markedly more reliable and are the better default if
-you have the option. The crash-auto-fix loop (see Features) mitigates this
-somewhat — a small model's first attempt crashing isn't necessarily fatal
-anymore — but it isn't a substitute for a capable model; it only catches
-crash-on-boot failures, not silently wrong behavior.
-
-### Unraid
-
-See [UNRAID.md](UNRAID.md), or install the `AppForge Hub` template from
-Community Applications (once published) / the
-[AoN-Unraid-Apps](https://github.com/aon082910/AoN-Unraid-Apps) repo.
-
-### Local development
-
-```bash
-# one-time: install deps and the shared runtime used by generated apps
-cd server && npm install && cd runtime-template && npm install && cd ../../web && npm install
-
-# terminal 1
-cd server && npm run dev
-
-# terminal 2
-cd web && npm run dev
-```
-
-The web dev server proxies `/api` and `/preview` to `http://localhost:8000`
-(see `web/vite.config.ts`), so open the Vite dev URL, not the backend port,
-while developing.
-
-## How generation works
-
-Every project starts as a copy of `server/runtime-template/` (an Express app
-with `lib/db.js` and `lib/auth.js` helpers already wired to a per-project
-SQLite file). The AI is prompted to respond with plain-text `===FILE:
-path===` / `===END FILE===` blocks (see `server/src/ai/generator.ts`) rather
-than JSON — file content is taken verbatim between markers, so there's no
-escaping for the model to get wrong. An earlier JSON-based version broke in
-practice: a local model emitted an unescaped template literal inside a JSON
-string and `JSON.parse` choked on it. The delimiter format sidesteps that
-class of failure entirely and has proven more robust across model sizes.
-
-Generated apps have no network access to `npm install`; all their
-dependencies (express, `node:sqlite` in place of better-sqlite3, bcryptjs,
-jsonwebtoken, cookie-parser) are pre-installed once in the shared runtime
-template and made available via `NODE_PATH`, so generation and running both
-work fully offline.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+[Open an issue](https://github.com/aon082910/appforge-hub/issues). See `LICENSE` for the license.
